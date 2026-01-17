@@ -52,7 +52,7 @@ def get_fmp_data(ticker):
     
     try:
         # 1. 핵심 재무 비율 (ROE, Margin, PER, Debt 등 다 있음)
-        url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey=st.secrets["general"]["FMP_API_KEY"]
+        url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey="7HHpAIcOk53R1j3dNxcPHYjDIbmfmhaR"
         r_ratios = requests.get(url_ratios).json()
         
         # 2. 실시간 주가
