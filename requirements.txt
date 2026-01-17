@@ -1,1 +1,3 @@
-yfinance
+yahooquery
+pandas
+plotly
