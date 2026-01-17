@@ -57,7 +57,7 @@ def to_float(x, default=0.0):
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker):
     # [★중요] 아까 받으신 Alpha Vantage 키를 여기에 넣어주세요!
-    api_key = "여기에_키를_붙여넣으세요"  
+    api_key = "6I5WFN8TPZ79RKC3"  
     
     try:
         # Overview
