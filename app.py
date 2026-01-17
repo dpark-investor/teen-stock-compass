@@ -86,13 +86,13 @@ def create_card(col, title, value, unit, status, description, custom_icon=None):
     elif status == "okay": color_class = "okay"
     else: color_class = "bad"
     
-    # 아이콘이 따로 지정되지 않았을 때의 기본값 (귀여운 버전)
+    # 아이콘이 따로 지정되지 않았을 때의 기본값
     if custom_icon:
         icon = custom_icon
     else:
-        if status == "good": icon = "🔥"    # 좋으면 불꽃!
-        elif status == "okay": icon = "🐣"  # 보통이면 병아리
-        else: icon = "☔"                   # 나쁘면 우산
+        if status == "good": icon = "🔥"
+        elif status == "okay": icon = "🐣"
+        else: icon = "☔"
     
     with col:
         st.markdown(f"""
@@ -126,4 +126,67 @@ if ticker:
 
             # 데이터 변환
             price = to_float(price_data.get('05. price'), 0)
-            roe = to_float(overview.get('ReturnOnEquityTT
+            
+            # [수정된 부분] 오타 없이 완벽하게 수정했습니다.
+            roe = to_float(overview.get('ReturnOnEquityTTM'), 0) * 100
+            
+            margin = to_float(overview.get('ProfitMargin'), 0) * 100
+            growth = to_float(overview.get('QuarterlyRevenueGrowthYOY'), 0) * 100
+            pe = to_float(overview.get('TrailingPE'), 0)
+            eps = to_float(overview.get('EPS'), 0)
+            pb = to_float(overview.get('PriceToBookRatio'), 0)
+
+            # 결과 출력
+            st.subheader(f"📊 Analysis Result: {ticker}")
+            st.caption(f"Current Price: ${price:,.2f}")
+
+            # [10대 맞춤형 아이콘 & 설명]
+            
+            c1, c2, c3 = st.columns(3)
+            
+            # 1. ROE (성적표)
+            roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
+            roe_icon = "🏆" if roe_status == "good" else ("🤔" if roe_status == "okay" else "💤")
+            create_card(c1, "ROE (Score)", f"{roe:.1f}", "%", roe_status, 
+                        "**The Report Card.** Over 15% is an A+! Shows how smart they are with money.", roe_icon)
+
+            # 2. Margin (순이익)
+            margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
+            margin_icon = "💰" if margin_status == "good" else ("🪙" if margin_status == "okay" else "💸")
+            create_card(c2, "Net Margin (Profit)", f"{margin:.1f}", "%", margin_status, 
+                        "**Pure Cash.** How much money they actually keep in their pocket.", margin_icon)
+
+            # 3. Growth (성장)
+            growth_status = "good" if growth >= 10 else ("okay" if growth > 0 else "bad")
+            growth_icon = "🚀" if growth_status == "good" else ("🚶" if growth_status == "okay" else "🐌")
+            create_card(c3, "Growth (YoY)", f"{growth:.1f}", "%", growth_status, 
+                        "**Is it getting bigger?** We want to see this Rocket go UP!", growth_icon)
+
+            c4, c5, c6 = st.columns(3)
+            
+            # 4. P/E (가격)
+            if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
+            elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
+            else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
+            
+            pe_icon = "🏷️" if pe_status == "good" else "💎" 
+            create_card(c4, "P/E Ratio", pe_disp, "", pe_status, 
+                        "**Is it on Sale?** Lower number = Cheaper price tag.", pe_icon)
+            
+            # 5. EPS (주당 순이익)
+            eps_status = "good" if eps > 0 else "bad"
+            eps_icon = "🍕" if eps_status == "good" else "🦴"
+            create_card(c5, "EPS", f"${eps}", "", eps_status, 
+                        "**Your Slice.** Profit per single stock ticket. Must be positive!", eps_icon)
+
+            # 6. P/B (자산가치)
+            pb_status = "good" if pb < 3 else "okay"
+            pb_icon = "🎁" if pb_status == "good" else "📦"
+            create_card(c6, "P/B Ratio", f"{pb:.1f}", "x", pb_status, 
+                        "**Bargain Hunt.** Close to 1.0 means you buy it for the raw material price.", pb_icon)
+            
+# ---------------------------------------------------------
+# Footer
+# ---------------------------------------------------------
+st.markdown("---")
+st.markdown("<div style='text-align: center; color: gray;'>Built by <b>Daniel Park</b></div>", unsafe_allow_html=True)
