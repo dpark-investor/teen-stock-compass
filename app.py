@@ -1,6 +1,6 @@
 import streamlit as st
-import pandas as pd
 import requests
+import time
 
 # ---------------------------------------------------------
 # 1. 페이지 설정
@@ -44,55 +44,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. 데이터 가져오기 (Source: Finviz)
+# 3. 데이터 가져오기 (Direct JSON API)
 # ---------------------------------------------------------
-@st.cache_data(ttl=300) # 5분 캐시
-def get_finviz_data(ticker):
+@st.cache_data(ttl=60) # 1분 캐시
+def get_data_from_api(ticker):
+    # 야후 파이낸스 내부 API 주소 (뒷문)
+    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=summaryDetail,financialData,defaultKeyStatistics,price"
+    
+    # 브라우저인 척 위장하는 헤더
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
     try:
-        url = f"https://finviz.com/quote.ashx?t={ticker}"
-        # 사람인 척 위장하는 헤더 (필수)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=5)
         
-        response = requests.get(url, headers=headers)
-        
-        # 티커가 없거나 페이지가 없으면 
+        # 데이터가 없거나 차단당했을 경우
         if response.status_code != 200:
             return None
-
-        # 판다스로 표(Table) 긁어오기
-        tables = pd.read_html(response.text)
+            
+        # JSON 데이터 열기
+        data = response.json()
+        result = data['quoteSummary']['result'][0]
         
-        # Finviz의 재무 데이터는 보통 5번째나 6번째 표에 있음
-        # 표를 순회하며 우리가 원하는 데이터가 있는 표를 찾음
-        df = tables[-2] # 뒤에서 두번째 표가 주로 재무제표임
+        return result
         
-        # 보기 쉽게 컬럼 이름을 0, 1로 변경
-        df.columns = ['Key', 'Value'] * (len(df.columns) // 2)
-        
-        # 모든 데이터를 하나의 딕셔너리로 변환
-        data_dict = {}
-        for i in range(0, len(df.columns), 2):
-            subset = df.iloc[:, i:i+2]
-            subset.columns = ['Key', 'Value']
-            for _, row in subset.iterrows():
-                data_dict[row['Key']] = row['Value']
-        
-        return data_dict
-        
-    except Exception as e:
+    except Exception:
         return None
-
-# 숫자 뒤의 %, B, M 등을 떼고 숫자로 바꾸는 함수
-def parse_value(value_str):
-    if not isinstance(value_str, str): return 0
-    try:
-        if value_str == '-': return 0
-        value_str = value_str.replace('%', '').replace(',', '')
-        if 'B' in value_str: return float(value_str.replace('B', '')) * 1000000000
-        if 'M' in value_str: return float(value_str.replace('M', '')) * 1000000
-        return float(value_str)
-    except:
-        return 0
 
 # ---------------------------------------------------------
 # 4. 카드 생성 함수
@@ -118,77 +96,76 @@ def create_card(col, title, value, unit, status, description):
 # 5. 메인 로직
 # ---------------------------------------------------------
 st.title("🧭 Teen Stock Compass: Pro Dashboard")
-st.markdown("Analyze financial health using real-time data from **Finviz**.")
+st.markdown("Analyze financial health using **Direct API Connection**.")
 st.divider()
 
 ticker = st.text_input("ENTER TICKER (e.g., AAPL, NVDA, TSLA)", value="AAPL").upper()
 
 if ticker:
-    with st.spinner(f"Fetching data for {ticker} from Finviz..."):
-        data = get_finviz_data(ticker)
+    with st.spinner(f"Connecting to Server for {ticker}..."):
+        raw_data = get_data_from_api(ticker)
 
-        if not data:
-            st.error(f"⚠️ Could not find data for '{ticker}'. Please check the symbol.")
+        if not raw_data:
+            st.error(f"⚠️ Connection Failed for '{ticker}'. The free data server is busy. Please wait 1 minute and try again.")
         else:
-            # --- Finviz 데이터 파싱 ---
-            
-            # 1. 가격
-            price_str = data.get('Price', '0')
-            price = parse_value(price_str)
-            
-            # 2. ROE
-            roe_str = data.get('ROE', '0')
-            roe = parse_value(roe_str)
-            
-            # 3. Profit Margin
-            margin_str = data.get('Profit Margin', '0')
-            margin = parse_value(margin_str)
-            
-            # 4. Sales Q/Q (Growth)
-            growth_str = data.get('Sales Q/Q', '0')
-            growth = parse_value(growth_str)
-            
-            # 5. Debt/Eq
-            debt_str = data.get('Debt/Eq', '0')
-            # Finviz는 1.5 이렇게 줌 (퍼센트 아님). 그래서 100을 곱해야 함
-            debt = parse_value(debt_str) * 100 
-            
-            # 6. P/E
-            pe_str = data.get('P/E', '0')
-            pe = parse_value(pe_str)
+            # --- 데이터 추출 (복잡한 JSON 구조 파해치기) ---
+            try:
+                # 1. 가격
+                price = raw_data['price']['regularMarketPrice']['raw']
+                
+                # 2. ROE
+                roe = raw_data['financialData'].get('returnOnEquity', {}).get('raw', 0) * 100
+                
+                # 3. Profit Margin
+                margin = raw_data['defaultKeyStatistics'].get('profitMargins', {}).get('raw', 0) * 100
+                # 만약 위에서 못 찾으면 financialData에서 찾기
+                if margin == 0:
+                    margin = raw_data['financialData'].get('profitMargins', {}).get('raw', 0) * 100
+                
+                # 4. Revenue Growth
+                growth = raw_data['financialData'].get('revenueGrowth', {}).get('raw', 0) * 100
+                
+                # 5. Debt to Equity
+                debt = raw_data['financialData'].get('debtToEquity', {}).get('raw', 0)
+                
+                # 6. PER
+                pe = raw_data['summaryDetail'].get('trailingPE', {}).get('raw', 0)
 
-            # --- 결과 출력 ---
-            st.subheader(f"📊 Analysis Result: {ticker}")
-            st.caption(f"Current Price: ${price:,.2f}")
+                # --- 결과 출력 ---
+                st.subheader(f"📊 Analysis Result: {ticker}")
+                st.caption(f"Current Price: ${price:,.2f}")
 
-            # Row 1
-            c1, c2, c3 = st.columns(3)
+                # Row 1
+                c1, c2, c3 = st.columns(3)
+                
+                roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
+                create_card(c1, "ROE (Efficiency)", f"{roe:.1f}", "%", roe_status,
+                            "**Return on Equity:** How efficiently the company uses money. >15% is excellent.")
+
+                margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
+                create_card(c2, "Net Margin (Profit)", f"{margin:.1f}", "%", margin_status,
+                            "**Net Profit Margin:** Pure profit percentage.")
+
+                growth_status = "good" if growth >= 10 else ("okay" if growth > 0 else "bad")
+                create_card(c3, "Growth (YoY)", f"{growth:.1f}", "%", growth_status,
+                            "**Revenue Growth:** Is the company expanding?")
+
+                # Row 2
+                c4, c5 = st.columns(2)
+                
+                debt_status = "good" if debt < 100 else ("okay" if debt < 200 else "bad")
+                create_card(c4, "Debt Ratio (Safety)", f"{debt:.1f}", "%", debt_status,
+                            "**Debt-to-Equity:** Lower is safer. Over 200% is risky.")
+
+                if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
+                elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
+                else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
+                
+                create_card(c5, "P/E Ratio (Valuation)", pe_disp, "", pe_status,
+                            "**Price-to-Earnings:** Lower P/E often means undervalued.")
             
-            roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
-            create_card(c1, "ROE (Efficiency)", f"{roe:.1f}", "%", roe_status,
-                        "**Return on Equity:** How efficiently the company uses money. >15% is excellent.")
-
-            margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
-            create_card(c2, "Net Margin (Profit)", f"{margin:.1f}", "%", margin_status,
-                        "**Net Profit Margin:** Pure profit percentage.")
-
-            growth_status = "good" if growth >= 10 else ("okay" if growth > 0 else "bad")
-            create_card(c3, "Growth (YoY)", f"{growth:.1f}", "%", growth_status,
-                        "**Sales Growth (Q/Q):** Is the company expanding?")
-
-            # Row 2
-            c4, c5 = st.columns(2)
-            
-            debt_status = "good" if debt < 100 else ("okay" if debt < 200 else "bad")
-            create_card(c4, "Debt Ratio (Safety)", f"{debt:.1f}", "%", debt_status,
-                        "**Debt-to-Equity:** Lower is safer. Over 200% is risky.")
-
-            if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
-            elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
-            else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
-            
-            create_card(c5, "P/E Ratio (Valuation)", pe_disp, "", pe_status,
-                        "**Price-to-Earnings:** Lower P/E often means undervalued.")
+            except Exception as e:
+                st.error("Data received but incomplete. Try a different company.")
 
 # ---------------------------------------------------------
 # 6. Footer
