@@ -1,8 +1,6 @@
 import streamlit as st
-from yahooquery import Ticker
 import pandas as pd
-import plotly.graph_objects as go
-import time
+import requests
 
 # ---------------------------------------------------------
 # 1. 페이지 설정
@@ -14,7 +12,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. 디자인 (다크모드 & 카드)
+# 2. 디자인 (CSS)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -46,35 +44,55 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. 데이터 가져오기 (YahooQuery 엔진 사용)
+# 3. 데이터 가져오기 (Source: Finviz)
 # ---------------------------------------------------------
-@st.cache_data(ttl=300) # 5분간 데이터 캐시 (서버 부하 감소)
-def get_financial_data(ticker_symbol):
+@st.cache_data(ttl=300) # 5분 캐시
+def get_finviz_data(ticker):
     try:
-        # YahooQuery 엔진 시동
-        stock = Ticker(ticker_symbol)
+        url = f"https://finviz.com/quote.ashx?t={ticker}"
+        # 사람인 척 위장하는 헤더 (필수)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         
-        # 데이터 4종류를 한 번에 가져옴 (속도 최적화)
-        summary_detail = stock.summary_detail[ticker_symbol]
-        financial_data = stock.financial_data[ticker_symbol]
-        key_stats = stock.key_stats[ticker_symbol]
-        price_data = stock.price[ticker_symbol]
-
-        # 데이터가 '문자열(에러메시지)'로 오면 데이터 없는 것
-        if isinstance(summary_detail, str):
+        response = requests.get(url, headers=headers)
+        
+        # 티커가 없거나 페이지가 없으면 
+        if response.status_code != 200:
             return None
 
-        # 모든 데이터를 하나의 딕셔너리로 통합
-        data = {}
-        data.update(summary_detail)
-        data.update(financial_data)
-        data.update(key_stats)
-        data.update(price_data)
+        # 판다스로 표(Table) 긁어오기
+        tables = pd.read_html(response.text)
         
-        return data
+        # Finviz의 재무 데이터는 보통 5번째나 6번째 표에 있음
+        # 표를 순회하며 우리가 원하는 데이터가 있는 표를 찾음
+        df = tables[-2] # 뒤에서 두번째 표가 주로 재무제표임
+        
+        # 보기 쉽게 컬럼 이름을 0, 1로 변경
+        df.columns = ['Key', 'Value'] * (len(df.columns) // 2)
+        
+        # 모든 데이터를 하나의 딕셔너리로 변환
+        data_dict = {}
+        for i in range(0, len(df.columns), 2):
+            subset = df.iloc[:, i:i+2]
+            subset.columns = ['Key', 'Value']
+            for _, row in subset.iterrows():
+                data_dict[row['Key']] = row['Value']
+        
+        return data_dict
         
     except Exception as e:
         return None
+
+# 숫자 뒤의 %, B, M 등을 떼고 숫자로 바꾸는 함수
+def parse_value(value_str):
+    if not isinstance(value_str, str): return 0
+    try:
+        if value_str == '-': return 0
+        value_str = value_str.replace('%', '').replace(',', '')
+        if 'B' in value_str: return float(value_str.replace('B', '')) * 1000000000
+        if 'M' in value_str: return float(value_str.replace('M', '')) * 1000000
+        return float(value_str)
+    except:
+        return 0
 
 # ---------------------------------------------------------
 # 4. 카드 생성 함수
@@ -93,69 +111,70 @@ def create_card(col, title, value, unit, status, description):
             </div>
         </div>
         """, unsafe_allow_html=True)
-        with st.expander("Meanings"):
+        with st.expander("Meaning"):
             st.write(description)
 
 # ---------------------------------------------------------
 # 5. 메인 로직
 # ---------------------------------------------------------
-st.title("🧭 Teen Stock Compass: Real-Time Pro")
-st.markdown("Professional Grade Analysis powered by **YahooQuery Engine**.")
+st.title("🧭 Teen Stock Compass: Pro Dashboard")
+st.markdown("Analyze financial health using real-time data from **Finviz**.")
 st.divider()
 
-ticker = st.text_input("ENTER TICKER (e.g., AAPL, TSLA, AMZN)", value="AAPL").upper()
+ticker = st.text_input("ENTER TICKER (e.g., AAPL, NVDA, TSLA)", value="AAPL").upper()
 
 if ticker:
-    with st.spinner(f"Connecting to live market data for {ticker}..."):
-        data = get_financial_data(ticker)
+    with st.spinner(f"Fetching data for {ticker} from Finviz..."):
+        data = get_finviz_data(ticker)
 
-        if not data or 'regularMarketPrice' not in data:
-            st.error(f"⚠️ Could not retrieve data for '{ticker}'. Check the symbol or try again.")
+        if not data:
+            st.error(f"⚠️ Could not find data for '{ticker}'. Please check the symbol.")
         else:
-            # --- 데이터 추출 (더 안전하고 정확함) ---
+            # --- Finviz 데이터 파싱 ---
             
-            # 가격
-            price = data.get('regularMarketPrice', 0)
+            # 1. 가격
+            price_str = data.get('Price', '0')
+            price = parse_value(price_str)
             
-            # 1. ROE (자기자본이익률)
-            roe = data.get('returnOnEquity', 0)
-            roe = roe * 100 if roe else 0
+            # 2. ROE
+            roe_str = data.get('ROE', '0')
+            roe = parse_value(roe_str)
             
-            # 2. Net Margin (순이익률)
-            margin = data.get('profitMargins', 0)
-            margin = margin * 100 if margin else 0
+            # 3. Profit Margin
+            margin_str = data.get('Profit Margin', '0')
+            margin = parse_value(margin_str)
             
-            # 3. Growth (성장률)
-            growth = data.get('revenueGrowth', 0)
-            growth = growth * 100 if growth else 0
+            # 4. Sales Q/Q (Growth)
+            growth_str = data.get('Sales Q/Q', '0')
+            growth = parse_value(growth_str)
             
-            # 4. Debt (부채비율)
-            debt = data.get('debtToEquity', 0)
-            # 데이터가 없을 경우 0으로 처리
-            debt = debt if debt else 0
+            # 5. Debt/Eq
+            debt_str = data.get('Debt/Eq', '0')
+            # Finviz는 1.5 이렇게 줌 (퍼센트 아님). 그래서 100을 곱해야 함
+            debt = parse_value(debt_str) * 100 
             
-            # 5. PER (주가수익비율)
-            pe = data.get('trailingPE', 0)
-            pe = pe if pe else 0
+            # 6. P/E
+            pe_str = data.get('P/E', '0')
+            pe = parse_value(pe_str)
 
             # --- 결과 출력 ---
-            st.subheader(f"📊 Live Analysis: {ticker}")
-            st.caption(f"Real-Time Price: ${price:,.2f}")
+            st.subheader(f"📊 Analysis Result: {ticker}")
+            st.caption(f"Current Price: ${price:,.2f}")
 
             # Row 1
             c1, c2, c3 = st.columns(3)
             
             roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
             create_card(c1, "ROE (Efficiency)", f"{roe:.1f}", "%", roe_status,
-                        "**Return on Equity:** How efficiently the company uses money. >15% is great.")
+                        "**Return on Equity:** How efficiently the company uses money. >15% is excellent.")
 
             margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
             create_card(c2, "Net Margin (Profit)", f"{margin:.1f}", "%", margin_status,
-                        "**Net Profit Margin:** Pure profit percentage out of revenue.")
+                        "**Net Profit Margin:** Pure profit percentage.")
 
             growth_status = "good" if growth >= 10 else ("okay" if growth > 0 else "bad")
             create_card(c3, "Growth (YoY)", f"{growth:.1f}", "%", growth_status,
-                        "**Revenue Growth:** Is the company expanding? Positive is good.")
+                        "**Sales Growth (Q/Q):** Is the company expanding?")
 
             # Row 2
             c4, c5 = st.columns(2)
@@ -167,6 +186,7 @@ if ticker:
             if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
             elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
             else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
+            
             create_card(c5, "P/E Ratio (Valuation)", pe_disp, "", pe_status,
                         "**Price-to-Earnings:** Lower P/E often means undervalued.")
 
