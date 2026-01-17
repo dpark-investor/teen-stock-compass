@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import time
+import requests
 
 # ---------------------------------------------------------
 # 1. Page Configuration
@@ -44,15 +45,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. Data Fetching Function (Safe Mode)
+# 3. Data Fetching Function (Anti-Blocking Mode)
 # ---------------------------------------------------------
 @st.cache_data(ttl=900)
 def get_financial_data(ticker_symbol):
-    time.sleep(1) # Prevent rate limiting
     try:
-        stock = yf.Ticker(ticker_symbol)
-        return stock.info
-    except Exception:
+        # [핵심 수정] 가짜 신분증(User-Agent) 만들기
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        
+        # 야후에 신분증 제시하며 데이터 요청
+        stock = yf.Ticker(ticker_symbol, session=session)
+        
+        # 데이터가 실제로 있는지 확인하기 위해 기본 정보 호출
+        info = stock.info
+        return info
+    except Exception as e:
         return None
 
 # ---------------------------------------------------------
@@ -94,10 +104,14 @@ if ticker:
     with st.spinner(f"Analyzing {ticker}... Please wait..."):
         info = get_financial_data(ticker)
 
-        if not info or 'currentPrice' not in info:
-            st.error(f"⚠️ Could not find data for '{ticker}'. Please check the symbol.")
+        # 데이터가 없거나, 텅 빈 껍데기만 왔을 경우 방어
+        if not info or 'regularMarketPrice' not in info and 'currentPrice' not in info:
+            st.warning(f"⚠️ Yahoo Finance is currently limiting data for '{ticker}'. Please try again in 5 minutes or try a different ticker.")
         else:
-            # Extract Metrics
+            # 가격 정보 안전하게 가져오기
+            price = info.get('currentPrice') or info.get('regularMarketPrice') or 0
+            
+            # 지표 추출
             roe = info.get('returnOnEquity', 0)
             roe = roe * 100 if roe is not None else 0
             
@@ -113,9 +127,9 @@ if ticker:
             pe = info.get('trailingPE', 0)
             pe = pe if pe is not None else 0
 
-            # Display Results
+            # 화면 출력
             st.subheader(f"📊 Analysis Result: {ticker}")
-            st.caption(f"Current Price: ${info.get('currentPrice', 0):,.2f}")
+            st.caption(f"Current Price: ${price:,.2f}")
 
             # Row 1
             c1, c2, c3 = st.columns(3)
