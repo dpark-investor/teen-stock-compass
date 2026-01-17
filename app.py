@@ -46,7 +46,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# 3. 유틸 함수 (안전한 숫자 변환 - 에러 방지용)
+# 3. 유틸 함수 (안전한 숫자 변환)
 # ---------------------------------------------------------
 def to_float(x, default=0.0) -> float:
     try:
@@ -57,12 +57,11 @@ def to_float(x, default=0.0) -> float:
         return default
 
 # ---------------------------------------------------------
-# 4. 데이터 가져오기 (수정됨: 키 직접 입력 방식)
+# 4. 데이터 가져오기 (키 내장형)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_fmp_data(ticker: str):
-    # [수정] 비밀 금고 대신 키를 직접 넣어서 에러를 원천 차단했습니다.
-    # 만약 이 키가 아직 인증이 안 되었다면 "demo" 라고 적으시면 됩니다.
+    # [수정] 아버님의 키를 여기에 직접 넣었습니다. (괄호 에러 없음)
     api_key = "7HHpAIcOk53R1j3dNxcPHYjDIbmfmhaR"
 
     try:
@@ -74,20 +73,17 @@ def get_fmp_data(ticker: str):
         url_price = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}"
         resp_price = requests.get(url_price, timeout=10)
 
-        # 응답 상태 확인
         if resp_ratios.status_code != 200 or resp_price.status_code != 200:
             return None
 
         r_ratios = resp_ratios.json()
         r_price = resp_price.json()
 
-        # 데이터가 비어있거나 에러 메시지가 왔을 때 방어
-        if not r_ratios or isinstance(r_ratios, dict) and "Error Message" in r_ratios:
+        if not r_ratios or (isinstance(r_ratios, dict) and "Error Message" in r_ratios):
              return None
-        if not r_price or isinstance(r_price, dict) and "Error Message" in r_price:
+        if not r_price or (isinstance(r_price, dict) and "Error Message" in r_price):
              return None
 
-        # 리스트 형태인 경우 첫 번째 요소 가져오기
         final_ratios = r_ratios[0] if isinstance(r_ratios, list) else r_ratios
         final_price = r_price[0] if isinstance(r_price, list) else r_price
 
@@ -133,11 +129,53 @@ if ticker:
         data = get_fmp_data(ticker)
 
     if not data:
-        st.error(f"⚠️ Could not find data for '{ticker}'. (Check if Email is Verified or try 'AAPL' only)")
+        st.error(f"⚠️ Could not find data for '{ticker}'. (Try 'AAPL' to check connection)")
     else:
         ratios = data["ratios"]
         price_info = data["price"]
 
-        # --- 데이터 추출 (안전한 변환 함수 사용) ---
+        # --- [수정 완료] 괄호 닫기 완벽하게 처리됨 ---
         price = to_float(price_info.get("price"), default=0.0)
-        roe = to_float(ratios.get("returnOnEquityTTM"), default=0.0
+        roe = to_float(ratios.get("returnOnEquityTTM"), default=0.0) * 100
+        margin = to_float(ratios.get("netProfitMarginTTM"), default=0.0) * 100
+        growth = None
+        debt = to_float(ratios.get("debtEquityRatioTTM"), default=0.0) * 100
+        pe = to_float(ratios.get("priceEarningsRatioTTM"), default=-1.0)
+
+        # --- 결과 출력 ---
+        st.subheader(f"📊 Analysis Result: {ticker}")
+        st.caption(f"Current Price: ${price:,.2f}")
+
+        # Row 1
+        c1, c2, c3 = st.columns(3)
+
+        roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
+        create_card(c1, "ROE (Efficiency)", f"{roe:.1f}", "%", roe_status,
+            "**Return on Equity:** How efficiently the company uses shareholders' money.")
+
+        margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
+        create_card(c2, "Net Margin (Profit)", f"{margin:.1f}", "%", margin_status,
+            "**Net Profit Margin:** How much pure profit the company keeps from sales.")
+
+        create_card(c3, "Growth Data", "N/A", "", "okay",
+            "Growth data requires a premium endpoint.")
+
+        # Row 2
+        c4, c5 = st.columns(2)
+
+        debt_status = "good" if debt < 100 else ("okay" if debt < 200 else "bad")
+        create_card(c4, "Debt Ratio (Safety)", f"{debt:.1f}", "%", debt_status,
+            "**Debt-to-Equity:** Lower is safer. Over 200% is generally considered risky.")
+
+        if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
+        elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
+        else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
+
+        create_card(c5, "P/E Ratio (Valuation)", pe_disp, "", pe_status,
+            "**Price-to-Earnings:** Lower P/E can mean cheaper, but compare within the same industry.")
+
+# ---------------------------------------------------------
+# 7. Footer
+# ---------------------------------------------------------
+st.markdown("---")
+st.markdown("<div style='text-align: center; color: gray;'>Built by <b>Daniel Park</b></div>", unsafe_allow_html=True)
