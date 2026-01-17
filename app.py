@@ -46,7 +46,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# 3. 유틸 함수 (안전한 숫자 변환)
+# 3. 유틸 함수 (안전한 숫자 변환 - 에러 방지용)
 # ---------------------------------------------------------
 def to_float(x, default=0.0) -> float:
     try:
@@ -57,52 +57,41 @@ def to_float(x, default=0.0) -> float:
         return default
 
 # ---------------------------------------------------------
-# 4. 데이터 가져오기 (보안 강화 버전)
+# 4. 데이터 가져오기 (수정됨: 키 직접 입력 방식)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_fmp_data(ticker: str):
-    # Secrets 구조가 다를 수 있으니 안전하게 접근
-    general = st.secrets.get("general", {})
-    api_key = general.get("FMP_API_KEY")
-
-    # 혹시 secrets.toml을 general 없이 쓴 경우도 지원
-    if not api_key:
-        api_key = st.secrets.get("FMP_API_KEY")
-
-    if not api_key:
-        # 캐시 함수 내부에서 st.error를 띄워도 되지만,
-        # 배포 환경에 따라 메시지가 애매할 수 있어 None만 반환하고
-        # 호출부에서 에러 처리하는 편이 더 깔끔합니다.
-        return {"error": "missing_api_key"}
+    # [수정] 비밀 금고 대신 키를 직접 넣어서 에러를 원천 차단했습니다.
+    # 만약 이 키가 아직 인증이 안 되었다면 "demo" 라고 적으시면 됩니다.
+    api_key = "7HHpAIcOk53R1j3dNxcPHYjDIbmfmhaR"
 
     try:
-        # Ratio (TTM)
+        # Ratio (재무 비율)
         url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={api_key}"
         resp_ratios = requests.get(url_ratios, timeout=10)
-        if resp_ratios.status_code != 200:
-            return None
-        r_ratios = resp_ratios.json()
-
-        # Price Quote
+        
+        # Price Quote (주가)
         url_price = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}"
         resp_price = requests.get(url_price, timeout=10)
-        if resp_price.status_code != 200:
+
+        # 응답 상태 확인
+        if resp_ratios.status_code != 200 or resp_price.status_code != 200:
             return None
+
+        r_ratios = resp_ratios.json()
         r_price = resp_price.json()
 
-        # 응답 형태 방어 (리스트/비어있음/에러 메시지)
-        if not isinstance(r_ratios, list) or not r_ratios:
-            return None
-        if not isinstance(r_price, list) or not r_price:
-            return None
+        # 데이터가 비어있거나 에러 메시지가 왔을 때 방어
+        if not r_ratios or isinstance(r_ratios, dict) and "Error Message" in r_ratios:
+             return None
+        if not r_price or isinstance(r_price, dict) and "Error Message" in r_price:
+             return None
 
-        # 가끔 {"Error Message": "..."} 같은 형태가 섞일 때 방어
-        if isinstance(r_ratios[0], dict) and ("Error Message" in r_ratios[0] or "error" in r_ratios[0]):
-            return None
-        if isinstance(r_price[0], dict) and ("Error Message" in r_price[0] or "error" in r_price[0]):
-            return None
+        # 리스트 형태인 경우 첫 번째 요소 가져오기
+        final_ratios = r_ratios[0] if isinstance(r_ratios, list) else r_ratios
+        final_price = r_price[0] if isinstance(r_price, list) else r_price
 
-        return {"ratios": r_ratios[0], "price": r_price[0]}
+        return {"ratios": final_ratios, "price": final_price}
 
     except Exception:
         return None
@@ -111,15 +100,9 @@ def get_fmp_data(ticker: str):
 # 5. 카드 생성 함수
 # ---------------------------------------------------------
 def create_card(col, title, value, unit, status, description):
-    if status == "good":
-        color_class = "good"
-        icon = "🟢"
-    elif status == "okay":
-        color_class = "okay"
-        icon = "🟡"
-    else:
-        color_class = "bad"
-        icon = "🔴"
+    if status == "good": color_class = "good"; icon = "🟢"
+    elif status == "okay": color_class = "okay"; icon = "🟡"
+    else: color_class = "bad"; icon = "🔴"
 
     with col:
         st.markdown(
@@ -128,4 +111,33 @@ def create_card(col, title, value, unit, status, description):
             <div class="metric-title">{icon} {title}</div>
             <div class="metric-value {color_class}">
                 {value}{unit}
-            </
+            </div>
+        </div>
+        """,
+            unsafe_allow_html=True
+        )
+        with st.expander("Meaning"):
+            st.write(description)
+
+# ---------------------------------------------------------
+# 6. 메인 UI
+# ---------------------------------------------------------
+st.title("🧭 Teen Stock Compass: Pro Dashboard")
+st.markdown("Powered by **Financial Modeling Prep (Official Data)**.")
+st.divider()
+
+ticker = st.text_input("ENTER TICKER (e.g., AAPL, TSLA, NVDA)", value="AAPL").strip().upper()
+
+if ticker:
+    with st.spinner(f"Fetching official financial data for {ticker}..."):
+        data = get_fmp_data(ticker)
+
+    if not data:
+        st.error(f"⚠️ Could not find data for '{ticker}'. (Check if Email is Verified or try 'AAPL' only)")
+    else:
+        ratios = data["ratios"]
+        price_info = data["price"]
+
+        # --- 데이터 추출 (안전한 변환 함수 사용) ---
+        price = to_float(price_info.get("price"), default=0.0)
+        roe = to_float(ratios.get("returnOnEquityTTM"), default=0.0
