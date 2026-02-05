@@ -1,9 +1,6 @@
 import streamlit as st
 import requests
-import pandas as pd
 
-# 1. FMP 키 가져오기 (비밀금고에서)
-api_key = st.secrets["FMP_API_KEY"]
 # ---------------------------------------------------------
 # 1. 페이지 설정
 # ---------------------------------------------------------
