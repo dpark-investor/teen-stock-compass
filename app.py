@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. 디자인 (CSS) - 그대로 유지
+# 2. 디자인 (CSS)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -44,31 +44,40 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. 데이터 엔진 (FMP API로 교체 완료!) 🚀
+# 3. 데이터 엔진 (에러 탐지기 장착됨 🕵️‍♂️)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_fmp_data(ticker):
-    # [비밀 금고에서 키 꺼내기]
-    try:
-        api_key = st.secrets["FMP_API_KEY"]
-    except:
-        st.error("⚠️ Secrets에 'FMP_API_KEY'가 없습니다. 설정을 확인해주세요.")
+    # [진단 1] 비밀 금고 확인
+    if "FMP_API_KEY" not in st.secrets:
+        st.error("🚨 치명적 오류: Secrets(비밀금고)에 'FMP_API_KEY'가 없습니다!")
+        st.info("👉 Streamlit 설정 > Secrets 메뉴에 키를 저장했는지 확인해주세요.")
         return None
+    
+    api_key = st.secrets["FMP_API_KEY"]
 
     try:
-        # 1. 프로필 (가격, 회사정보)
+        # [진단 2] 키가 진짜인지 테스트 (프로필 데이터 요청)
         url_profile = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={api_key}"
-        res_profile = requests.get(url_profile).json()
+        response = requests.get(url_profile)
+        res_profile = response.json()
         
-        # 2. 핵심 지표 (ROE, PE, 마진 등 - TTM 기준)
+        # FMP 서버가 에러 메시지를 보냈는지 확인
+        if isinstance(res_profile, dict) and "Error Message" in res_profile:
+            st.error(f"🚫 키 에러 발생: {res_profile['Error Message']}")
+            st.warning("👉 무료 키가 맞는지, 혹은 키를 잘못 복사하지 않았는지 확인해주세요.")
+            return None
+            
+        if not res_profile: 
+            st.warning(f"⚠️ '{ticker}'에 대한 데이터를 찾을 수 없습니다. (티커 철자 확인)")
+            return None
+
+        # 3. 나머지 데이터 가져오기 (정상일 때만 실행)
         url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={api_key}"
         res_ratios = requests.get(url_ratios).json()
 
-        # 3. 성장성 (매출 성장)
         url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=1&apikey={api_key}"
         res_growth = requests.get(url_growth).json()
-
-        if not res_profile: return None
 
         # 데이터 합치기
         data = {
@@ -79,6 +88,7 @@ def get_fmp_data(ticker):
         return data
 
     except Exception as e:
+        st.error(f"🚨 시스템 에러: {e}") 
         return None
 
 # ---------------------------------------------------------
@@ -116,11 +126,9 @@ ticker = st.text_input("ENTER TICKER (e.g., AAPL, NVDA, TSLA)", value="AAPL").st
 
 if ticker:
     with st.spinner(f"Analyzing {ticker} Financials..."):
-        data = get_fmp_data(ticker)
+        data = get_fmp_data(ticker) # 위에서 만든 탐지기 함수 실행
 
-        if not data:
-            st.error(f"⚠️ Could not find data for '{ticker}'. Check the ticker symbol.")
-        else:
+        if data:
             profile = data['profile']
             ratios = data['ratios']
             growth_data = data['growth']
@@ -131,11 +139,8 @@ if ticker:
             margin = ratios.get('netProfitMarginTTM', 0) * 100
             growth = growth_data.get('revenueGrowth', 0) * 100
             pe = ratios.get('priceEarningsRatioTTM', 0)
-            eps = ratios.get('netIncomePerShareTTM', 0) # EPS 대신 순이익/주식수
-            if eps == 0: eps = profile.get('lastDiv', 0) # 혹시 없으면 배당으로 대체하거나 0 (FMP는 구조가 조금 다름)
             
-            # FMP는 EPS를 profile이나 income statement에서 가져오는게 정확함. 
-            # 여기서는 편의상 profile의 price / PE로 역산하거나 0으로 둠.
+            # EPS 계산 (순이익/주식수)
             if pe > 0: eps_calc = price / pe
             else: eps_calc = 0
             
@@ -148,46 +153,45 @@ if ticker:
             # [10대 맞춤형 아이콘 & 설명]
             c1, c2, c3 = st.columns(3)
             
-            # 1. ROE (성적표)
+            # 1. ROE
             roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
             roe_icon = "🏆" if roe_status == "good" else ("🤔" if roe_status == "okay" else "💤")
             create_card(c1, "ROE (Score)", f"{roe:.1f}", "%", roe_status, 
-                        "**The Report Card.** Over 15% is an A+! Shows how smart they are with money.", roe_icon)
+                        "**The Report Card.** Over 15% is an A+!", roe_icon)
 
-            # 2. Margin (순이익)
+            # 2. Margin
             margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
             margin_icon = "💰" if margin_status == "good" else ("🪙" if margin_status == "okay" else "💸")
             create_card(c2, "Net Margin", f"{margin:.1f}", "%", margin_status, 
-                        "**Pure Cash.** How much money they actually keep in their pocket.", margin_icon)
+                        "**Pure Cash.** How much they keep.", margin_icon)
 
-            # 3. Growth (성장)
+            # 3. Growth
             growth_status = "good" if growth >= 10 else ("okay" if growth > 0 else "bad")
             growth_icon = "🚀" if growth_status == "good" else ("🚶" if growth_status == "okay" else "🐌")
             create_card(c3, "Growth (YoY)", f"{growth:.1f}", "%", growth_status, 
-                        "**Is it getting bigger?** We want to see this Rocket go UP!", growth_icon)
+                        "**Rocket Speed.** Is it getting bigger?", growth_icon)
 
             c4, c5, c6 = st.columns(3)
             
-            # 4. P/E (가격)
+            # 4. P/E
             if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
             elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
             else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
-            
             pe_icon = "🏷️" if pe_status == "good" else "💎" 
             create_card(c4, "P/E Ratio", pe_disp, "", pe_status, 
-                        "**Is it on Sale?** Lower number = Cheaper price tag.", pe_icon)
+                        "**Price Tag.** Lower is usually better.", pe_icon)
             
-            # 5. EPS (주당 순이익) - 추정치
+            # 5. EPS
             eps_status = "good" if eps_calc > 0 else "bad"
             eps_icon = "🍕" if eps_status == "good" else "🦴"
             create_card(c5, "EPS (Est)", f"${eps_calc:.2f}", "", eps_status, 
-                        "**Your Slice.** Approximate profit per single stock ticket.", eps_icon)
+                        "**Your Slice.** Profit per share.", eps_icon)
 
-            # 6. P/B (자산가치)
+            # 6. P/B
             pb_status = "good" if pb < 3 else "okay"
             pb_icon = "🎁" if pb_status == "good" else "📦"
             create_card(c6, "P/B Ratio", f"{pb:.1f}", "x", pb_status, 
-                        "**Bargain Hunt.** Close to 1.0 means you buy it for the raw material price.", pb_icon)
+                        "**Bargain Hunt.** Close to 1.0 is cheap.", pb_icon)
             
 # ---------------------------------------------------------
 # Footer
