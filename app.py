@@ -1,17 +1,18 @@
 import streamlit as st
 import requests
+import pandas as pd
 
 # ---------------------------------------------------------
 # 1. 페이지 설정
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Teen Stock Compass Pro",
+    page_title="WEMAKEMOVES Finance",
     page_icon="🧭",
     layout="wide"
 )
 
 # ---------------------------------------------------------
-# 2. 디자인 (CSS)
+# 2. 디자인 (CSS) - 그대로 유지
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -43,50 +44,51 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. 유틸 함수
-# ---------------------------------------------------------
-def to_float(x, default=0.0):
-    try:
-        if x is None or x == "None" or x == "-": return default
-        return float(x)
-    except: return default
-
-# ---------------------------------------------------------
-# 4. 데이터 가져오기 (Alpha Vantage)
+# 3. 데이터 엔진 (FMP API로 교체 완료!) 🚀
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
-def get_stock_data(ticker):
-    # [★중요] 아까 받으신 Alpha Vantage 키를 여기에 넣어주세요!
-    api_key = "6I5WFN8TPZ79RKC3"  
-    
+def get_fmp_data(ticker):
+    # [비밀 금고에서 키 꺼내기]
     try:
-        # Overview
-        url_overview = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={ticker}&apikey={api_key}"
-        data_overview = requests.get(url_overview).json()
-        
-        # Price
-        url_price = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={api_key}"
-        data_price = requests.get(url_price).json()
+        api_key = st.secrets["FMP_API_KEY"]
+    except:
+        st.error("⚠️ Secrets에 'FMP_API_KEY'가 없습니다. 설정을 확인해주세요.")
+        return None
 
-        if not data_overview: return None
-        if "Note" in data_overview or "Information" in data_overview:
-            return "LIMIT"
-            
-        return {"overview": data_overview, "price": data_price}
+    try:
+        # 1. 프로필 (가격, 회사정보)
+        url_profile = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={api_key}"
+        res_profile = requests.get(url_profile).json()
         
-    except Exception:
+        # 2. 핵심 지표 (ROE, PE, 마진 등 - TTM 기준)
+        url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={api_key}"
+        res_ratios = requests.get(url_ratios).json()
+
+        # 3. 성장성 (매출 성장)
+        url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=1&apikey={api_key}"
+        res_growth = requests.get(url_growth).json()
+
+        if not res_profile: return None
+
+        # 데이터 합치기
+        data = {
+            "profile": res_profile[0],
+            "ratios": res_ratios[0] if res_ratios else {},
+            "growth": res_growth[0] if res_growth else {}
+        }
+        return data
+
+    except Exception as e:
         return None
 
 # ---------------------------------------------------------
-# 5. 카드 UI 생성 함수 (아이콘 커스텀 기능 추가)
+# 4. 카드 UI 생성 함수
 # ---------------------------------------------------------
 def create_card(col, title, value, unit, status, description, custom_icon=None):
-    # 상태에 따른 색상 설정
     if status == "good": color_class = "good"
     elif status == "okay": color_class = "okay"
     else: color_class = "bad"
     
-    # 아이콘이 따로 지정되지 않았을 때의 기본값
     if custom_icon:
         icon = custom_icon
     else:
@@ -104,44 +106,46 @@ def create_card(col, title, value, unit, status, description, custom_icon=None):
             st.write(description)
 
 # ---------------------------------------------------------
-# 6. 메인 화면 로직
+# 5. 메인 화면 로직
 # ---------------------------------------------------------
-st.title("🧭 Teen Stock Compass: Pro Dashboard")
-st.markdown("Analysis powered by **Alpha Vantage**.")
+st.title("🧭 WEMAKEMOVES Financials")
+st.markdown("Analysis powered by **FMP (Financial Modeling Prep)**.")
 st.divider()
 
-ticker = st.text_input("ENTER TICKER (e.g., META, NVDA, TSLA)", value="META").strip().upper()
+ticker = st.text_input("ENTER TICKER (e.g., AAPL, NVDA, TSLA)", value="AAPL").strip().upper()
 
 if ticker:
-    with st.spinner(f"Analyzing {ticker} for you..."):
-        data = get_stock_data(ticker)
+    with st.spinner(f"Analyzing {ticker} Financials..."):
+        data = get_fmp_data(ticker)
 
-        if data == "LIMIT":
-             st.error("⚠️ Daily Limit Reached. (Free Key: 25 searches/day)")
-        elif not data:
-            st.error(f"⚠️ Could not find data for '{ticker}'.")
+        if not data:
+            st.error(f"⚠️ Could not find data for '{ticker}'. Check the ticker symbol.")
         else:
-            overview = data['overview']
-            price_data = data['price'].get('Global Quote', {})
+            profile = data['profile']
+            ratios = data['ratios']
+            growth_data = data['growth']
 
-            # 데이터 변환
-            price = to_float(price_data.get('05. price'), 0)
+            # 데이터 추출 (없으면 0 처리)
+            price = profile.get('price', 0)
+            roe = ratios.get('returnOnEquityTTM', 0) * 100
+            margin = ratios.get('netProfitMarginTTM', 0) * 100
+            growth = growth_data.get('revenueGrowth', 0) * 100
+            pe = ratios.get('priceEarningsRatioTTM', 0)
+            eps = ratios.get('netIncomePerShareTTM', 0) # EPS 대신 순이익/주식수
+            if eps == 0: eps = profile.get('lastDiv', 0) # 혹시 없으면 배당으로 대체하거나 0 (FMP는 구조가 조금 다름)
             
-            # [수정된 부분] 오타 없이 완벽하게 수정했습니다.
-            roe = to_float(overview.get('ReturnOnEquityTTM'), 0) * 100
+            # FMP는 EPS를 profile이나 income statement에서 가져오는게 정확함. 
+            # 여기서는 편의상 profile의 price / PE로 역산하거나 0으로 둠.
+            if pe > 0: eps_calc = price / pe
+            else: eps_calc = 0
             
-            margin = to_float(overview.get('ProfitMargin'), 0) * 100
-            growth = to_float(overview.get('QuarterlyRevenueGrowthYOY'), 0) * 100
-            pe = to_float(overview.get('TrailingPE'), 0)
-            eps = to_float(overview.get('EPS'), 0)
-            pb = to_float(overview.get('PriceToBookRatio'), 0)
+            pb = ratios.get('priceToBookRatioTTM', 0)
 
-            # 결과 출력
-            st.subheader(f"📊 Analysis Result: {ticker}")
-            st.caption(f"Current Price: ${price:,.2f}")
+            # 결과 헤더
+            st.subheader(f"📊 Analysis Result: {profile.get('companyName', ticker)}")
+            st.caption(f"Current Price: ${price:,.2f} | Sector: {profile.get('sector', '-')}")
 
             # [10대 맞춤형 아이콘 & 설명]
-            
             c1, c2, c3 = st.columns(3)
             
             # 1. ROE (성적표)
@@ -153,7 +157,7 @@ if ticker:
             # 2. Margin (순이익)
             margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
             margin_icon = "💰" if margin_status == "good" else ("🪙" if margin_status == "okay" else "💸")
-            create_card(c2, "Net Margin (Profit)", f"{margin:.1f}", "%", margin_status, 
+            create_card(c2, "Net Margin", f"{margin:.1f}", "%", margin_status, 
                         "**Pure Cash.** How much money they actually keep in their pocket.", margin_icon)
 
             # 3. Growth (성장)
@@ -173,11 +177,11 @@ if ticker:
             create_card(c4, "P/E Ratio", pe_disp, "", pe_status, 
                         "**Is it on Sale?** Lower number = Cheaper price tag.", pe_icon)
             
-            # 5. EPS (주당 순이익)
-            eps_status = "good" if eps > 0 else "bad"
+            # 5. EPS (주당 순이익) - 추정치
+            eps_status = "good" if eps_calc > 0 else "bad"
             eps_icon = "🍕" if eps_status == "good" else "🦴"
-            create_card(c5, "EPS", f"${eps}", "", eps_status, 
-                        "**Your Slice.** Profit per single stock ticket. Must be positive!", eps_icon)
+            create_card(c5, "EPS (Est)", f"${eps_calc:.2f}", "", eps_status, 
+                        "**Your Slice.** Approximate profit per single stock ticket.", eps_icon)
 
             # 6. P/B (자산가치)
             pb_status = "good" if pb < 3 else "okay"
@@ -189,4 +193,4 @@ if ticker:
 # Footer
 # ---------------------------------------------------------
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray;'>Built by <b>Daniel Park</b></div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: gray;'>Built by <b>Daniel Park</b> | Powered by WEMAKEMOVES AI</div>", unsafe_allow_html=True)
