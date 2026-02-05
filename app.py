@@ -44,51 +44,87 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. 데이터 엔진 (에러 탐지기 장착됨 🕵️‍♂️)
+# 3. 데이터 엔진 (MacGyver 버전: 원재료로 직접 계산 🛠️)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_fmp_data(ticker):
-    # [진단 1] 비밀 금고 확인
+    # [진단] 비밀 금고 확인
     if "FMP_API_KEY" not in st.secrets:
-        st.error("🚨 치명적 오류: Secrets(비밀금고)에 'FMP_API_KEY'가 없습니다!")
-        st.info("👉 Streamlit 설정 > Secrets 메뉴에 키를 저장했는지 확인해주세요.")
+        st.error("🚨 Secrets(비밀금고)에 'FMP_API_KEY'가 없습니다.")
         return None
     
     api_key = st.secrets["FMP_API_KEY"]
 
     try:
-        # [진단 2] 키가 진짜인지 테스트 (프로필 데이터 요청)
-        url_profile = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={api_key}"
-        response = requests.get(url_profile)
-        res_profile = response.json()
+        # 1. 주가 정보 (Quote Endpoint는 아직 무료!)
+        url_quote = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}"
+        res_quote = requests.get(url_quote).json()
         
-        # FMP 서버가 에러 메시지를 보냈는지 확인
-        if isinstance(res_profile, dict) and "Error Message" in res_profile:
-            st.error(f"🚫 키 에러 발생: {res_profile['Error Message']}")
-            st.warning("👉 무료 키가 맞는지, 혹은 키를 잘못 복사하지 않았는지 확인해주세요.")
+        if not res_quote:
+            st.warning(f"⚠️ '{ticker}' 주가 정보를 찾을 수 없습니다.")
             return None
-            
-        if not res_profile: 
-            st.warning(f"⚠️ '{ticker}'에 대한 데이터를 찾을 수 없습니다. (티커 철자 확인)")
-            return None
+        
+        # 2. 손익계산서 (Income Statement) - 원본 데이터 가져오기
+        # limit=2를 하는 이유: 작년 매출과 비교해서 성장률(Growth)을 구하려고
+        url_income = f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}?period=annual&limit=2&apikey={api_key}"
+        res_income = requests.get(url_income).json()
 
-        # 3. 나머지 데이터 가져오기 (정상일 때만 실행)
-        url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={api_key}"
-        res_ratios = requests.get(url_ratios).json()
+        # 3. 대차대조표 (Balance Sheet) - 자본총계 가져오기 (ROE 계산용)
+        url_balance = f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{ticker}?period=annual&limit=1&apikey={api_key}"
+        res_balance = requests.get(url_balance).json()
 
-        url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=1&apikey={api_key}"
-        res_growth = requests.get(url_growth).json()
+        if not res_income or not res_balance:
+             st.warning(f"⚠️ '{ticker}'의 재무제표가 아직 업데이트되지 않았습니다.")
+             return None
 
-        # 데이터 합치기
+        # --- [직접 계산기 돌리기] ---
+        # 필요한 숫자들 추출
+        price = res_quote[0].get('price', 0)
+        name = res_quote[0].get('name', ticker)
+        
+        # 최신(올해) 데이터
+        this_year = res_income[0]
+        revenue = this_year.get('revenue', 0)
+        net_income = this_year.get('netIncome', 0)
+        eps = this_year.get('eps', 0)
+        
+        # 작년 데이터 (성장률 계산용)
+        last_year_rev = res_income[1].get('revenue', 1) if len(res_income) > 1 else revenue
+
+        # 자본 (ROE 계산용)
+        equity = res_balance[0].get('totalStockholdersEquity', 1)
+
+        # 1. ROE (자기자본이익률) = 순이익 / 자본
+        roe = (net_income / equity) * 100 if equity != 0 else 0
+
+        # 2. Net Margin (순이익률) = 순이익 / 매출
+        margin = (net_income / revenue) * 100 if revenue != 0 else 0
+
+        # 3. Growth (성장률) = (올해매출 - 작년매출) / 작년매출
+        growth = ((revenue - last_year_rev) / last_year_rev) * 100
+
+        # 4. P/E (주가수익비율) = 주가 / EPS
+        pe = price / eps if eps > 0 else 0
+        
+        # 5. P/B (주가순자산비율) = 주가 / (자본/주식수) -> 약식으로 시총/자본
+        market_cap = res_quote[0].get('marketCap', 0)
+        pb = market_cap / equity if equity != 0 else 0
+
+        # 데이터 포장해서 내보내기
         data = {
-            "profile": res_profile[0],
-            "ratios": res_ratios[0] if res_ratios else {},
-            "growth": res_growth[0] if res_growth else {}
+            "name": name,
+            "price": price,
+            "roe": roe,
+            "margin": margin,
+            "growth": growth,
+            "pe": pe,
+            "eps": eps,
+            "pb": pb
         }
         return data
 
     except Exception as e:
-        st.error(f"🚨 시스템 에러: {e}") 
+        st.error(f"🚨 계산 중 오류 발생: {e}") 
         return None
 
 # ---------------------------------------------------------
@@ -119,53 +155,39 @@ def create_card(col, title, value, unit, status, description, custom_icon=None):
 # 5. 메인 화면 로직
 # ---------------------------------------------------------
 st.title("🧭 WEMAKEMOVES Financials")
-st.markdown("Analysis powered by **FMP (Financial Modeling Prep)**.")
+st.markdown("Analysis powered by **FMP (Raw Data Calculation)**.")
 st.divider()
 
 ticker = st.text_input("ENTER TICKER (e.g., AAPL, NVDA, TSLA)", value="AAPL").strip().upper()
 
 if ticker:
     with st.spinner(f"Analyzing {ticker} Financials..."):
-        data = get_fmp_data(ticker) # 위에서 만든 탐지기 함수 실행
+        data = get_fmp_data(ticker)
 
         if data:
-            profile = data['profile']
-            ratios = data['ratios']
-            growth_data = data['growth']
-
-            # 데이터 추출 (없으면 0 처리)
-            price = profile.get('price', 0)
-            roe = ratios.get('returnOnEquityTTM', 0) * 100
-            margin = ratios.get('netProfitMarginTTM', 0) * 100
-            growth = growth_data.get('revenueGrowth', 0) * 100
-            pe = ratios.get('priceEarningsRatioTTM', 0)
-            
-            # EPS 계산 (순이익/주식수)
-            if pe > 0: eps_calc = price / pe
-            else: eps_calc = 0
-            
-            pb = ratios.get('priceToBookRatioTTM', 0)
-
             # 결과 헤더
-            st.subheader(f"📊 Analysis Result: {profile.get('companyName', ticker)}")
-            st.caption(f"Current Price: ${price:,.2f} | Sector: {profile.get('sector', '-')}")
+            st.subheader(f"📊 Analysis Result: {data['name']}")
+            st.caption(f"Current Price: ${data['price']:,.2f}")
 
             # [10대 맞춤형 아이콘 & 설명]
             c1, c2, c3 = st.columns(3)
             
             # 1. ROE
+            roe = data['roe']
             roe_status = "good" if roe >= 15 else ("okay" if roe >= 10 else "bad")
             roe_icon = "🏆" if roe_status == "good" else ("🤔" if roe_status == "okay" else "💤")
             create_card(c1, "ROE (Score)", f"{roe:.1f}", "%", roe_status, 
                         "**The Report Card.** Over 15% is an A+!", roe_icon)
 
             # 2. Margin
+            margin = data['margin']
             margin_status = "good" if margin >= 20 else ("okay" if margin >= 10 else "bad")
             margin_icon = "💰" if margin_status == "good" else ("🪙" if margin_status == "okay" else "💸")
             create_card(c2, "Net Margin", f"{margin:.1f}", "%", margin_status, 
                         "**Pure Cash.** How much they keep.", margin_icon)
 
             # 3. Growth
+            growth = data['growth']
             growth_status = "good" if growth >= 10 else ("okay" if growth > 0 else "bad")
             growth_icon = "🚀" if growth_status == "good" else ("🚶" if growth_status == "okay" else "🐌")
             create_card(c3, "Growth (YoY)", f"{growth:.1f}", "%", growth_status, 
@@ -174,6 +196,7 @@ if ticker:
             c4, c5, c6 = st.columns(3)
             
             # 4. P/E
+            pe = data['pe']
             if pe <= 0: pe_status = "bad"; pe_disp = "Loss"
             elif pe > 50: pe_status = "okay"; pe_disp = f"{pe:.1f}x"
             else: pe_status = "good"; pe_disp = f"{pe:.1f}x"
@@ -182,12 +205,14 @@ if ticker:
                         "**Price Tag.** Lower is usually better.", pe_icon)
             
             # 5. EPS
-            eps_status = "good" if eps_calc > 0 else "bad"
+            eps = data['eps']
+            eps_status = "good" if eps > 0 else "bad"
             eps_icon = "🍕" if eps_status == "good" else "🦴"
-            create_card(c5, "EPS (Est)", f"${eps_calc:.2f}", "", eps_status, 
+            create_card(c5, "EPS", f"${eps:.2f}", "", eps_status, 
                         "**Your Slice.** Profit per share.", eps_icon)
 
             # 6. P/B
+            pb = data['pb']
             pb_status = "good" if pb < 3 else "okay"
             pb_icon = "🎁" if pb_status == "good" else "📦"
             create_card(c6, "P/B Ratio", f"{pb:.1f}", "x", pb_status, 
